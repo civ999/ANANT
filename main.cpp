@@ -342,12 +342,10 @@ namespace AntiDebugChecks{
 		bool caught = false;
 		if(IsDebuggerPresent() != 0){
 			caught = true;
-			return 0;
 		}
 		if(!CheckRemoteDebuggerPresent(GetCurrentProcess(), &dbg)) return Utils::PrintError();
 		if(dbg){
 			caught = true;
-			return 0;
 		}
 		Utils::note(conf, "No debugger detected with CheckRemoteDebuggerPresent and present IsDebuggerPresent.", "Debugger detected with CheckRemoteDebuggerPresent and present IsDebuggerPresent.",
 				caught, DETECTED);
