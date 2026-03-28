@@ -62,7 +62,7 @@ struct Conf{
 	bool resourceCheck=false;
 	bool timingCheck=false;
 	bool sandboxCheck=false;
-	bool verbose=true;
+	bool verbose=false;
 	int score=0;
 };
 
@@ -108,6 +108,15 @@ namespace Utils{
 	}
 	
 	void getCheckType(Conf* conf) {	
+		if(!conf->verbose){
+			// default to all checks
+			conf->vmCheck = true;
+			conf->debugCheck = true;
+			conf->resourceCheck = true;
+			conf->timingCheck = true;
+			conf->sandboxCheck = true;
+			return;
+		}
 		std::string choice;
 		std::cout << "BULID CHECK TYPE:\n(y for yes, enter for skip)";
 		
@@ -138,7 +147,7 @@ namespace Utils{
 		
 		printReadableTypeCheck(*conf);
 		
-		if(conf->verbose) std::cout << "\n[NOTICE] Verbose Mode is ON\n" << std::endl;
+		std::cout << "\n[NOTICE] Verbose Mode is ON\n" << std::endl;
 	}
 	
 	void note(Conf* conf, const char* failMsg, const char* successMsg, bool detected, int signalWeight){
@@ -555,26 +564,26 @@ class AntiAnalysisMain{
 	public:
 	void startNow(){
 		if(conf.verbose) printBanner();
-		if(conf.verbose) Utils::getCheckType(&conf);
+		Utils::getCheckType(&conf);
 		if(conf.vmCheck == 0 && conf.debugCheck == 0 && conf.resourceCheck == 0 
 		   && conf.timingCheck == 0 && conf.sandboxCheck == 0){
 			if(conf.verbose) std::cout << "Please put atleast one check." << std::endl;
 			ExitProcess(-1);
 		}
 		if(conf.vmCheck){
-			std::cout << "\n === ANTI VM CHECK ===" << std::endl;
+			if(conf.verbose) std::cout << "\n === ANTI VM CHECK ===" << std::endl;
 			AntiVMChecks::processScan(&conf);
 			AntiVMChecks::checkMACs(&conf);
 			AntiVMChecks::cpuidVendorCheck(&conf);
 			AntiVMChecks::cpuidHypervisorBitCheck(&conf);
 		}
 		if(conf.debugCheck){
-			std::cout << "\n === ANTI DEBUG CHECK ===" << std::endl;
+			if(conf.verbose) std::cout << "\n === ANTI DEBUG CHECK ===" << std::endl;
 			AntiDebugChecks::checkDebugSimple(&conf);
 			AntiDebugChecks::checkHardwareBreakpoints(&conf);
 		}
 		if(conf.resourceCheck){
-			std::cout << "\n === RESOURCES CHECK ===" << std::endl;
+			if(conf.verbose) std::cout << "\n === RESOURCES CHECK ===" << std::endl;
 			Utils::WMI::WMIStart();
 			ResourcesChecks::smallDiskCheck(&conf);
 			ResourcesChecks::lowRAM(&conf);
@@ -585,12 +594,12 @@ class AntiAnalysisMain{
 			Utils::WMI::destroyCOM();
 		}
 		if(conf.timingCheck){
-			std::cout << "\n === TIMING CHECK ===" << std::endl;
+			if(conf.verbose) std::cout << "\n === TIMING CHECK ===" << std::endl;
 			TimingChecks::rdtscCpuidCheck(&conf);
 			TimingChecks::rdtscHeapHandleCheck(&conf);
 		}
 		if(conf.sandboxCheck){
-			std::cout << "\n === SANDBOX CHECK ===" << std::endl;
+			if(conf.verbose) std::cout << "\n === SANDBOX CHECK ===" << std::endl;
 			SandboxChecks::checkRecentsFolder(&conf);
 		}
 		
@@ -613,11 +622,11 @@ class AntiAnalysisMain{
 		}
 		else{
 			if(conf.score == DETECTED){
-				std::cout << "IM A GOOD BOY" << std::endl;
+				std::cout << "FAKE BEHAVIOR GOES HERE" << std::endl;
 				return;
 			}
 			else{ 
-				std::cout << "IM A BAD BOY" << std::endl;
+				std::cout << "REAL BEHAVIOR GOES HERE" << std::endl;
 				return; 
 			}
 		}
