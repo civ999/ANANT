@@ -10,29 +10,26 @@
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_DCOM
 
-#define DISK_THRESHOLD 50 // default for vms
+#define DISK_THRESHOLD 60 // default for vms
 #define PROCESSOR_THRESHOLD 4 // for vms
-#define RAM_THRESHOLD_GB 4 // for vms
+#define RAM_THRESHOLD_GB 4.0 // for vms
 
 #include <winsock2.h> // mac check
-#include <windows.h>
+#include <windows.h> // debug check, // ram check
 #include <iphlpapi.h> // mac check
 #include <ws2tcpip.h>
 #include <tlhelp32.h> // ProcessScan()
 #include <iostream>
 #include <intrin.h> // __cpuid
-#include <winreg.h>
 #include <string.h>
-#include <debugapi.h> // debug checks
-#include <sysinfoapi.h> // ram check
 #include <objbase.h> // wmi
 #include <wbemidl.h> // IWbem*
 #include <comdef.h>
-#include <memoryapi.h> // virtual alloc, virtual free
 #include <shlobj.h> // Recents probing
 #include <knownfolders.h> // known folders
 #include <shlguid.h> //guid definitions
 #include <iomanip>
+
 
 #define TRUE 1
 #define FALSE 0
@@ -54,6 +51,7 @@
 #define PERFECT 0
 #define HM 5
 #define SUSPICOUS 10
+#define VERY_SUSPICOUS 15
 #define DEFINITELY 20
 
 struct Conf{
@@ -62,7 +60,7 @@ struct Conf{
 	bool resourceCheck=false;
 	bool timingCheck=false;
 	bool sandboxCheck=false;
-	bool verbose=false;
+	bool verbose=true;
 	int score=0;
 };
 
@@ -117,6 +115,7 @@ namespace Utils{
 			conf->sandboxCheck = true;
 			return;
 		}
+		
 		std::string choice;
 		std::cout << "BULID CHECK TYPE:\n(y for yes, enter for skip)";
 		
@@ -147,17 +146,17 @@ namespace Utils{
 		
 		printReadableTypeCheck(*conf);
 		
-		std::cout << "\n[NOTICE] Verbose Mode is ON\n" << std::endl;
+		if(conf->verbose) std::cout << "\n[NOTICE] Verbose Mode is ON\n" << std::endl;
 	}
 	
 	void note(Conf* conf, const char* failMsg, const char* successMsg, bool detected, int signalWeight){
 		if(detected && conf->verbose){
 			std::cout << "[-] " << successMsg << "	[+" << std::to_string(signalWeight) << "]" << std::endl;
-			conf->score += signalWeight;
 		}
 		else if(!detected && conf->verbose){
 			std::cout << "[+] " << failMsg << std::endl;
 		}
+		if(detected) conf->score += signalWeight;
 	}
 	
 	namespace WMI{
@@ -270,7 +269,7 @@ namespace AntiVMChecks{
 		currMac = currMac->Next;
 		}
 		free(macs);
-		Utils::note(conf, "No VM Mac OUI Detected.", "VM Mac OUI Detected.", caught, GIANT_SIGNAL);
+		Utils::note(conf, "No VM Mac OUI Detected.", "VM Mac OUI Detected.", caught, BIG_SIGNAL);
 		return TRUE;
 	}
 
@@ -332,6 +331,13 @@ namespace AntiVMChecks{
 			if(cpuInfo[i] != 0) caught = true;
 		}
 		Utils::note(conf, "No CPUID Hypervisor vendor name detected", "CPUID Hypervisor vendor name detected" , caught, DETECTED);	
+		if(caught){
+			char vendor[13] = {0};
+			memcpy(vendor, &cpuInfo[1], 4);
+			memcpy(vendor, &cpuInfo[2], 4);
+			memcpy(vendor, &cpuInfo[3], 4);
+			std::cout << "[Vendor: " << vendor << "]" << std::endl;
+		}
 		return;
 	}
 	
@@ -393,6 +399,7 @@ namespace ResourcesChecks{
 		ULONGLONG diskSize = totalBytes.QuadPart / 1024 / 1024 / 1024;
 		if(diskSize <= DISK_THRESHOLD ) caught = true;
 		Utils::note(conf, "Normal disk size. (>50)", "Small disk size. (<=50)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << diskSize << "GB]" << std::endl;
 		return TRUE;
 	}
 		
@@ -400,18 +407,21 @@ namespace ResourcesChecks{
 		bool caught = false;
 		SYSTEM_INFO sysInfo = {0};
 		GetSystemInfo(&sysInfo);
-		if(sysInfo.dwNumberOfProcessors < PROCESSOR_THRESHOLD) caught = true;
-		Utils::note(conf,"Normal processor count. (>4)","Low processor count. (<4)", caught, MODERATE_SIGNAL);
+		if(sysInfo.dwNumberOfProcessors <= PROCESSOR_THRESHOLD) caught = true;
+		Utils::note(conf,"Normal processor count. (>4)","Low processor count. (<=4)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << sysInfo.dwNumberOfProcessors << "]" << std::endl;
 		return;
 	}
 		
 	int lowRAM(Conf* conf){
 		bool caught = false;
-		ULONGLONG RAMTotal;
-		if(!GetPhysicallyInstalledSystemMemory(&RAMTotal)) return Utils::PrintError();
-		long gbRAMTotal = RAMTotal / (1024 * 1024);
-		if(gbRAMTotal < RAM_THRESHOLD_GB) caught = true;
-		Utils::note(conf, "Normal RAM size. (>4GB)", "Low RAM size. (<4GB)", caught, MODERATE_SIGNAL);
+		MEMORYSTATUSEX totalMem;
+		totalMem.dwLength = sizeof(MEMORYSTATUSEX);
+		if(GlobalMemoryStatusEx(&totalMem) == 0) return Utils::PrintError();
+		double gbRAMTotal = (double)totalMem.ullTotalPhys / (1024.0 * 1024.0 * 1024.0);
+		if(gbRAMTotal <= RAM_THRESHOLD_GB) caught = true;
+		Utils::note(conf, "Normal RAM size. (>=4GB)", "Low RAM size. (<4GB)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << (int)gbRAMTotal << "GB]" << std::endl;
 		return TRUE;
 	}
 	
@@ -425,6 +435,7 @@ namespace ResourcesChecks{
 			if(x == normalScreenRes[i] && y == normalScreenRes[i+1]) caught=false;
 		}
 		Utils::note(conf, "Normal screen resolution choice.", "Weird screen resolution choice.", caught, SMALL_SIGNAL);
+		if(conf->verbose) std::cout << "[" << x << "x" << y << "]" << std::endl;
 	}	
 
 	int wmiCheckCacheMemory(Conf* conf){
@@ -492,36 +503,19 @@ namespace SandboxChecks{
 			} while(FindNextFileW(hFind, &fd));
 			FindClose(hFind);
 		}
-        else{ return Utils::PrintErrorCOM(res); }
+		else{
+			CoTaskMemFree(recentsPath);
+			return Utils::PrintErrorCOM(res); 
+		}
+		CoTaskMemFree(recentsPath);
         if(filesCount < 10) caught = true;
         Utils::note(conf, "More than 10 files detected in Recents folder.", "Less than 10 files detected in Recents folder.", caught, BIG_SIGNAL);
+        if(conf->verbose) std::cout << "[Found " << filesCount << " files]" << std::endl;
         return TRUE;
 	}
 };
 
 namespace TimingChecks{
-	void rdtscHeapHandleCheck(Conf* conf){
-		ULONGLONG tsc1 = 0;
-		ULONGLONG tsc2 = 0;
-		ULONGLONG tsc3 = 0;
-		bool caught = false;
-		for(int i = 0; i < 10; i++){
-			tsc1 = __rdtsc();
-			GetProcessHeap(); // waste cycles, is faster than CloseHandle(0) at any times
-			tsc2 = __rdtsc(); // so, tsc1 - tsc2 is how long it took to do GetProcessHeap().
-			CloseHandle(0); // waste cycles, should be longer than GetProcessHeap() in bare metal.
-			tsc3 = __rdtsc(); // so, tsc3 - tsc2 is how long it took to do CloseHandle(0)
-			if(((tsc3 - tsc2) / (tsc2 - tsc1)) < 10){
-				caught = true;
-				continue;
-			}
-			caught = false;
-		}
-		Utils::note(conf, "HeapHandle check took a normal amount of time.", "HeapHandle check took a short amount of time, too short.",
-				caught, MODERATE_SIGNAL);
-		return;
-	}
-		
 	void rdtscCpuidCheck(Conf* conf){
 		ULONGLONG tsc1 = 0;
 		ULONGLONG tsc2 = 0;
@@ -539,6 +533,7 @@ namespace TimingChecks{
 		else{ caught = true; }
 		Utils::note(conf, "__cpuid check took a short time. (<1000)", "__cpuid check took too long. (>1000)", 
 		caught, BIG_SIGNAL);
+		if(conf->verbose) std::cout << "[Average " << average << " cycles]" << std::endl;
 	}
 };
 
@@ -596,7 +591,6 @@ class AntiAnalysisMain{
 		if(conf.timingCheck){
 			if(conf.verbose) std::cout << "\n === TIMING CHECK ===" << std::endl;
 			TimingChecks::rdtscCpuidCheck(&conf);
-			TimingChecks::rdtscHeapHandleCheck(&conf);
 		}
 		if(conf.sandboxCheck){
 			if(conf.verbose) std::cout << "\n === SANDBOX CHECK ===" << std::endl;
@@ -614,10 +608,16 @@ class AntiAnalysisMain{
 					std::cout << "[?] Hm.." << std::endl;
 			}
 			else if(conf.score <= SUSPICOUS){
-				std::cout << "[-] Suspicous" << std::endl;		
+				std::cout << "[-] Suspicious." << std::endl;		
+			}
+			else if(conf.score <= VERY_SUSPICOUS){
+				std::cout << "[?] Very Suspicious." << std::endl;
 			}
 			else if(conf.score <= DETECTED){
-				std::cout << "[!!] Analysis Detected!" << std::endl;	
+				std::cout << "[!] Analysis Detected!" << std::endl;	
+			}
+			else{
+				std::cout << "[!!] ANALYSIS VERY DETECTED!! (did you even try)" << std::endl;
 			}
 		}
 		else{
@@ -630,6 +630,8 @@ class AntiAnalysisMain{
 				return; 
 			}
 		}
+		std::cin.get();
+		return;
 	}
 };
 	
@@ -816,3 +818,4 @@ int checkRegistryValue(){
 	}
 };
 */
+
