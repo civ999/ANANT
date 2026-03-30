@@ -28,7 +28,6 @@
 #include <shlobj.h> // Recents probing
 #include <knownfolders.h> // known folders
 #include <shlguid.h> //guid definitions
-#include <iomanip>
 
 
 #define TRUE 1
@@ -388,6 +387,24 @@ namespace AntiDebugChecks{
 		}
 		return FALSE;
 	}
+	
+	void checkPEBBeingDebugged(Conf* conf){
+		bool caught = false;
+		uintptr_t PEB;
+		__asm__ volatile(
+			"movq %%gs:0x60, %0"
+			:"=r"(PEB)
+			:
+			:
+		);
+		
+		unsigned char beingDebugged = *(unsigned char*)(PEB + 0x02);
+		
+		if(beingDebugged) caught = true;
+		Utils::note(conf, "BeingDebugged flag is not set in PEB block", "BeingDebugged flag is set in PEB block", caught, DETECTED);
+		return;
+		
+	}
 };
 
 namespace ResourcesChecks{
@@ -576,6 +593,7 @@ class AntiAnalysisMain{
 			if(conf.verbose) std::cout << "\n === ANTI DEBUG CHECK ===" << std::endl;
 			AntiDebugChecks::checkDebugSimple(&conf);
 			AntiDebugChecks::checkHardwareBreakpoints(&conf);
+			AntiDebugChecks::checkPEBBeingDebugged(&conf);
 		}
 		if(conf.resourceCheck){
 			if(conf.verbose) std::cout << "\n === RESOURCES CHECK ===" << std::endl;
@@ -646,8 +664,8 @@ int main(){
  * 1. Check software breakpoints (DEBUG)
  * 2. Mouse movement & Recents directory check (SANDBOX)
  * 3. More WMI Checks (RESOURCE)
- * 4. System firmware table check (CORE)
- * 5. VM Registry & File artifacts (CORE)
+ * 4. System firmware table check (ANTI VM)
+ * 5. VM Registry & File artifacts (ANTI VM)
  */
 
 /*
