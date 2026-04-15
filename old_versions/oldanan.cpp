@@ -12,7 +12,7 @@
 
 #define DISK_THRESHOLD 60 // default for vms
 #define PROCESSOR_THRESHOLD 4 // for vms
-#define RAM_THRESHOLD_GB 4 // for vms
+#define RAM_THRESHOLD_GB 4.0 // for vms
 
 #include <winsock2.h> // mac check
 #include <windows.h> // debug check, // ram check
@@ -28,7 +28,7 @@
 #include <shlobj.h> // Recents probing
 #include <knownfolders.h> // known folders
 #include <shlguid.h> //guid definitions
-#include <iomanip>
+
 
 #define TRUE 1
 #define FALSE 0
@@ -60,11 +60,7 @@ struct Conf{
 	bool timingCheck=false;
 	bool sandboxCheck=false;
 	bool verbose=true;
-	int finalScore=0;
-	int vmScore=0;
-	int debugScore=0;
-	int sandboxScore=0;
-	int analysisScore=0;
+	int score=0;
 };
 
 namespace Utils{
@@ -152,7 +148,7 @@ namespace Utils{
 		if(conf->verbose) std::cout << "\n[NOTICE] Verbose Mode is ON\n" << std::endl;
 	}
 	
-	void note(Conf* conf, const char* failMsg, const char* successMsg, bool detected, int signalWeight, ){
+	void note(Conf* conf, const char* failMsg, const char* successMsg, bool detected, int signalWeight){
 		if(detected && conf->verbose){
 			std::cout << "[-] " << successMsg << "	[+" << std::to_string(signalWeight) << "]" << std::endl;
 		}
@@ -334,6 +330,13 @@ namespace AntiVMChecks{
 			if(cpuInfo[i] != 0) caught = true;
 		}
 		Utils::note(conf, "No CPUID Hypervisor vendor name detected", "CPUID Hypervisor vendor name detected" , caught, DETECTED);	
+		if(caught){
+			char vendor[13] = {0};
+			memcpy(vendor, &cpuInfo[1], 4);
+			memcpy(vendor, &cpuInfo[2], 4);
+			memcpy(vendor, &cpuInfo[3], 4);
+			std::cout << "[Vendor: " << vendor << "]" << std::endl;
+		}
 		return;
 	}
 	
@@ -384,6 +387,24 @@ namespace AntiDebugChecks{
 		}
 		return FALSE;
 	}
+	
+	void checkPEBBeingDebugged(Conf* conf){
+		bool caught = false;
+		uintptr_t PEB;
+		__asm__ volatile(
+			"movq %%gs:0x60, %0"
+			:"=r"(PEB)
+			:
+			:
+		);
+		
+		unsigned char beingDebugged = *(unsigned char*)(PEB + 0x02);
+		
+		if(beingDebugged) caught = true;
+		Utils::note(conf, "BeingDebugged flag is not set in PEB block", "BeingDebugged flag is set in PEB block", caught, DETECTED);
+		return;
+		
+	}
 };
 
 namespace ResourcesChecks{
@@ -395,6 +416,7 @@ namespace ResourcesChecks{
 		ULONGLONG diskSize = totalBytes.QuadPart / 1024 / 1024 / 1024;
 		if(diskSize <= DISK_THRESHOLD ) caught = true;
 		Utils::note(conf, "Normal disk size. (>50)", "Small disk size. (<=50)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << diskSize << "GB]" << std::endl;
 		return TRUE;
 	}
 		
@@ -404,22 +426,19 @@ namespace ResourcesChecks{
 		GetSystemInfo(&sysInfo);
 		if(sysInfo.dwNumberOfProcessors <= PROCESSOR_THRESHOLD) caught = true;
 		Utils::note(conf,"Normal processor count. (>4)","Low processor count. (<=4)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << sysInfo.dwNumberOfProcessors << "]" << std::endl;
 		return;
 	}
 		
 	int lowRAM(Conf* conf){
-		// fix this, use GlobalStatusMemoryEx()
 		bool caught = false;
-		ULONGLONG RAMTotal = 0;
-		ULONGLONG res = GetPhysicallyInstalledSystemMemory(&RAMTotal);
-		if(!res){
-			std::cout << res << std::endl;
-			return Utils::PrintError();
-		}
-			return Utils::PrintError();
-		ULONGLONG gbRAMTotal = RAMTotal / (1024ULL * 1024ULL);
-		if(gbRAMTotal < RAM_THRESHOLD_GB) caught = true;
-		Utils::note(conf, "Normal RAM size. (>4GB)", "Low RAM size. (<4GB)", caught, MODERATE_SIGNAL);
+		MEMORYSTATUSEX totalMem;
+		totalMem.dwLength = sizeof(MEMORYSTATUSEX);
+		if(GlobalMemoryStatusEx(&totalMem) == 0) return Utils::PrintError();
+		double gbRAMTotal = (double)totalMem.ullTotalPhys / (1024.0 * 1024.0 * 1024.0);
+		if(gbRAMTotal <= RAM_THRESHOLD_GB) caught = true;
+		Utils::note(conf, "Normal RAM size. (>=4GB)", "Low RAM size. (<4GB)", caught, MODERATE_SIGNAL);
+		if(conf->verbose) std::cout << "[" << (int)gbRAMTotal << "GB]" << std::endl;
 		return TRUE;
 	}
 	
@@ -433,6 +452,7 @@ namespace ResourcesChecks{
 			if(x == normalScreenRes[i] && y == normalScreenRes[i+1]) caught=false;
 		}
 		Utils::note(conf, "Normal screen resolution choice.", "Weird screen resolution choice.", caught, SMALL_SIGNAL);
+		if(conf->verbose) std::cout << "[" << x << "x" << y << "]" << std::endl;
 	}	
 
 	int wmiCheckCacheMemory(Conf* conf){
@@ -507,33 +527,12 @@ namespace SandboxChecks{
 		CoTaskMemFree(recentsPath);
         if(filesCount < 10) caught = true;
         Utils::note(conf, "More than 10 files detected in Recents folder.", "Less than 10 files detected in Recents folder.", caught, BIG_SIGNAL);
+        if(conf->verbose) std::cout << "[Found " << filesCount << " files]" << std::endl;
         return TRUE;
 	}
 };
 
 namespace TimingChecks{
-	void rdtscHeapHandleCheck(Conf* conf){
-		ULONGLONG tsc1 = 0;
-		ULONGLONG tsc2 = 0;
-		ULONGLONG tsc3 = 0;
-		bool caught = false;
-		for(int i = 0; i < 10; i++){
-			tsc1 = __rdtsc();
-			GetProcessHeap(); // waste cycles, is faster than CloseHandle(0) at any times
-			tsc2 = __rdtsc(); // so, tsc1 - tsc2 is how long it took to do GetProcessHeap().
-			CloseHandle(0); // waste cycles, should be longer than GetProcessHeap() in bare metal.
-			tsc3 = __rdtsc(); // so, tsc3 - tsc2 is how long it took to do CloseHandle(0)
-			if(((tsc3 - tsc2) / (tsc2 - tsc1)) < 10){
-				caught = true;
-				continue;
-			}
-			caught = false;
-		}
-		Utils::note(conf, "HeapHandle check took a normal amount of time.", "HeapHandle check took a short amount of time, too short.",
-				caught, SMALL_SIGNAL);
-		return;
-	}
-		
 	void rdtscCpuidCheck(Conf* conf){
 		ULONGLONG tsc1 = 0;
 		ULONGLONG tsc2 = 0;
@@ -551,6 +550,7 @@ namespace TimingChecks{
 		else{ caught = true; }
 		Utils::note(conf, "__cpuid check took a short time. (<1000)", "__cpuid check took too long. (>1000)", 
 		caught, BIG_SIGNAL);
+		if(conf->verbose) std::cout << "[Average " << average << " cycles]" << std::endl;
 	}
 };
 
@@ -593,6 +593,7 @@ class AntiAnalysisMain{
 			if(conf.verbose) std::cout << "\n === ANTI DEBUG CHECK ===" << std::endl;
 			AntiDebugChecks::checkDebugSimple(&conf);
 			AntiDebugChecks::checkHardwareBreakpoints(&conf);
+			AntiDebugChecks::checkPEBBeingDebugged(&conf);
 		}
 		if(conf.resourceCheck){
 			if(conf.verbose) std::cout << "\n === RESOURCES CHECK ===" << std::endl;
@@ -608,7 +609,6 @@ class AntiAnalysisMain{
 		if(conf.timingCheck){
 			if(conf.verbose) std::cout << "\n === TIMING CHECK ===" << std::endl;
 			TimingChecks::rdtscCpuidCheck(&conf);
-			TimingChecks::rdtscHeapHandleCheck(&conf);
 		}
 		if(conf.sandboxCheck){
 			if(conf.verbose) std::cout << "\n === SANDBOX CHECK ===" << std::endl;
@@ -664,8 +664,8 @@ int main(){
  * 1. Check software breakpoints (DEBUG)
  * 2. Mouse movement & Recents directory check (SANDBOX)
  * 3. More WMI Checks (RESOURCE)
- * 4. System firmware table check (CORE)
- * 5. VM Registry & File artifacts (CORE)
+ * 4. System firmware table check (ANTI VM)
+ * 5. VM Registry & File artifacts (ANTI VM)
  */
 
 /*
