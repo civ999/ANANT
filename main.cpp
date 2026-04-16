@@ -333,8 +333,8 @@ namespace AntiVMChecks{
 		if(caught){
 			char vendor[13] = {0};
 			memcpy(vendor, &cpuInfo[1], 4);
-			memcpy(vendor, &cpuInfo[2], 4);
-			memcpy(vendor, &cpuInfo[3], 4);
+			memcpy(vendor + 4, &cpuInfo[2], 4);
+			memcpy(vendor + 8, &cpuInfo[3], 4);
 			std::cout << "[Vendor: " << vendor << "]" << std::endl;
 		}
 		return;
@@ -639,7 +639,7 @@ class AntiAnalysisMain{
 			}
 		}
 		else{
-			if(conf.score == DETECTED){
+			if(conf.score >= DETECTED){
 				std::cout << "FAKE BEHAVIOR GOES HERE" << std::endl;
 				return;
 			}
